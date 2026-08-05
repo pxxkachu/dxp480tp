@@ -33,14 +33,6 @@ cd /tmp/dxp480tp
 bash install.sh
 ```
 
-**No git network access?** Copy the repo onto a second USB stick, mount it, and run from there:
-
-```bash
-mount /dev/sdX1 /mnt/usb    # use lsblk to find the stick
-cd /mnt/usb/dxp480tp
-bash install.sh
-```
-
 ### What the installer prompts for
 
 | Prompt | Example |
@@ -438,7 +430,7 @@ In Bitwarden clients, set **Server URL** to `https://warden.lehaus.io`.
 
 Optional admin panel — run `sudo -u vaultwarden vaultwarden hash`, add `ADMIN_TOKEN=<PHC output>` to `/etc/vaultwarden.env`, restart, then open `https://warden.lehaus.io/admin` with the password you entered (not the PHC string).
 
-Back up `/var/lib/vaultwarden` regularly (`db.sqlite3`, `rsa_key.pem`, `attachments/`). Use SQLite `.backup` while the service is running, or include the directory in btrfs snapshots (step 16).
+Back up `/var/lib/vaultwarden` regularly (`db.sqlite3`, `rsa_key.pem`, `attachments/`). Use SQLite `.backup` while the service is running, or include the directory in btrfs snapshots (step 15).
 
 ## 14. Set up Caddy for HTTPS (`lehaus.io`)
 
@@ -458,7 +450,10 @@ If the build fails on a recent Caddy release, pin an older version:
 ```bash
 xcaddy build v2.9.1 --with github.com/caddy-dns/porkbun --output /tmp/caddy
 sudo install -m 755 /tmp/caddy /usr/local/bin/caddy
+rm /tmp/caddy
 ```
+
+Allow the `caddy` user to bind port 443 via `AmbientCapabilities` in the Caddy unit (§14 below).
 
 Confirm the module is present:
 
@@ -495,7 +490,7 @@ sudo chmod 600 /var/lib/caddy/porkbun.env
 | A | `*` | `<TS_IP>` | 600 |
 | A | `pihole` | `<PI_TS_IP>` | 600 |
 
-The wildcard covers NAS services (`qui.lehaus.io`, `qbit.lehaus.io`, `warden.lehaus.io`, `sonarr.lehaus.io`, etc.). The `pihole` record overrides the wildcard for `pihole.lehaus.io` only (`<PI_TS_IP>` = `tailscale ip -4` on **rpcmiv**).
+The wildcard covers NAS services (`qui.lehaus.io`, `qbit.lehaus.io`, `sonarr.lehaus.io`, etc.). The `pihole` record overrides the wildcard for `pihole.lehaus.io` only (`<PI_TS_IP>` = `tailscale ip -4` on **rpcmiv**).
 
 Verify from a tailnet device:
 
@@ -508,56 +503,39 @@ Should return `<TS_IP>` and `<PI_TS_IP>` respectively.
 
 ### Configure Caddy on the NAS
 
-`After=tailscaled.service` only waits for the Tailscale **daemon** — not for a `100.x` address on `tailscale0`. Use the same start script as **rpcmiv** to wait for Tailscale and export the live IP for `bind`.
+No wrapper scripts, no Tailscale IP env file, no tailscaled drop-in. Caddy listens on `:443` on all interfaces; the `(tailnet)` snippet returns **403** to anyone not on `100.64.0.0/10`. Tailscale is only needed for **clients** reaching you via `*.lehaus.io` — not for Caddy to start.
 
-```bash
-sudo nano /usr/local/bin/caddy-tailscale.sh
-```
+**Tradeoff:** LAN clients can reach Caddy on your NAS LAN IP:443 but get `Unauthorized`. Backend services should still bind `127.0.0.1` (see [HTTPS-only lockdown](#enforce-https-only-recommended) below).
 
-```bash
-#!/bin/bash
-set -euo pipefail
-set -a
-source /var/lib/caddy/porkbun.env
-set +a
-for _ in $(seq 1 30); do
-  TAILNET_IP="$(tailscale ip -4 2>/dev/null || true)"
-  if [[ -n "${TAILNET_IP}" ]] && ip -4 addr show dev tailscale0 2>/dev/null | grep -q "inet ${TAILNET_IP}/"; then
-    export TAILNET_IP
-    exec /usr/local/bin/caddy run --environ --config /var/lib/caddy/Caddyfile
-  fi
-  sleep 1
-done
-echo "tailscale0 has no usable IPv4 after 30s" >&2
-exit 1
-```
 
-```bash
-sudo chmod 755 /usr/local/bin/caddy-tailscale.sh
-```
+#### 1. Caddy systemd unit
 
-Create the systemd unit (the custom xcaddy build does not install one — do not use a drop-in unless you also installed the `caddy` package from pacman):
+Based on the [official Caddy unit](https://github.com/caddyserver/dist/blob/master/init/caddy.service). **Do not add `NoNewPrivileges=true`** — it breaks port 443.
 
 ```bash
 sudo nano /etc/systemd/system/caddy.service
+```
 
+```ini
 [Unit]
 Description=Caddy
-After=network-online.target tailscaled.service
-Wants=network-online.target
-Requires=tailscaled.service
+Documentation=https://caddyserver.com/docs/
+After=network-online.target
+Requires=network-online.target
 
 [Service]
 Type=notify
 User=caddy
 Group=caddy
-ExecStart=/usr/local/bin/caddy-tailscale.sh
-ExecReload=/usr/local/bin/caddy reload --config /var/lib/caddy/Caddyfile
-TimeoutStartSec=60
+Environment=HOME=/var/lib/caddy
+Environment=XDG_CONFIG_HOME=/var/lib/caddy
+EnvironmentFile=/var/lib/caddy/porkbun.env
+ExecStart=/usr/local/bin/caddy run --environ --config /var/lib/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /var/lib/caddy/Caddyfile --force
 TimeoutStopSec=5s
 LimitNOFILE=1048576
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/caddy
@@ -567,7 +545,7 @@ PrivateTmp=true
 WantedBy=multi-user.target
 ```
 
-Edit the Caddyfile:
+#### 2. Caddyfile
 
 ```bash
 sudo nano /var/lib/caddy/Caddyfile
@@ -583,7 +561,6 @@ sudo nano /var/lib/caddy/Caddyfile
 }
 
 (tailnet) {
-    bind {env.TAILNET_IP}
     @blocked not remote_ip 100.64.0.0/10
     respond @blocked "Unauthorized" 403
     tls {
@@ -628,14 +605,14 @@ warden.lehaus.io {
 
 plex.lehaus.io {
     import tailnet
-    reverse_proxy 127.0.0.1:32400
+    reverse_proxy https://127.0.0.1:32400 {
+        header_up Host {host}
+        header_up X-Forwarded-Proto {scheme}
+        transport http {
+            tls_insecure_skip_verify
+        }
+    }
 }
-
-start.lehaus.io {
-    import tailnet
-    reverse_proxy 127.0.0.1:3000
-}
-
 ```
 
 Replace `you@lehaus.io` with your email (used for Let's Encrypt account notices).
@@ -652,6 +629,15 @@ sudo systemctl enable --now caddy
 systemctl status caddy
 ```
 
+Verify:
+
+```bash
+ss -tlnp | grep caddy
+curl -sI https://sonarr.lehaus.io | head -3
+```
+
+Caddy listens on `:443` on all interfaces; only tailnet clients (`100.64.0.0/10`) get past the `(tailnet)` ACL.
+
 ### HTTPS access (NAS)
 
 | Service     | HTTPS URL                         |
@@ -664,7 +650,6 @@ systemctl status caddy
 | autobrr     | `https://autobrr.lehaus.io`       |
 | Vaultwarden | `https://warden.lehaus.io`        |
 | Plex (web)  | `https://plex.lehaus.io/web`      |
-| Homepage    | `https://start.lehaus.io`         |
 
 
 ### Plex (metadata web UI only)
@@ -684,7 +669,7 @@ In Plex → **Settings → Network** (admin account):
 
 Open `https://plex.lehaus.io/web` from any tailnet device. Sign out and back in once if the web client still shows the old URL.
 
-If you get **502 Bad Gateway**, Plex's self-signed cert on `:32400` is the usual cause — the Caddyfile block above must include `tls_insecure_skip_verify` in the `transport http` block. Verify from the NAS:
+If you get **502 Bad Gateway**, Plex is probably serving HTTPS on `:32400` — use the `https://127.0.0.1:32400` upstream with `tls_insecure_skip_verify` in the Caddyfile block above (not plain `reverse_proxy 127.0.0.1:32400`). Verify from the NAS:
 
 ```bash
 curl -sI http://127.0.0.1:32400/web | head -3
@@ -740,344 +725,7 @@ curl -m 3 http://<TS_IP>:8989 || echo "blocked as expected"
 
 HTTPS via Caddy should still work from any tailnet device.
 
-## 15. Install Homepage dashboard (`start.lehaus.io`)
-
-[Homepage](https://gethomepage.dev/) is a YAML-configured start page with live widgets for your *arr* stack, Pi-hole, qBittorrent, Plex, and Glances system stats on **dxp480tp** and **rpcmiv**. It runs natively on the NAS (no containers) and is served at `https://start.lehaus.io` through Caddy.
-
-Vaultwarden is intentionally **not** on this dashboard — keep using `https://warden.lehaus.io` directly.
-
-**Prerequisites:** step 14 complete (Caddy running, services bound to `127.0.0.1` if you applied HTTPS-only lockdown). On **rpcmiv**, complete [Glances for Homepage](#17-install-glances-for-homepage-dashboard) in [`rpcmiv/post_install.md`](../rpcmiv/post_install.md) so the Pi stats widget can reach `<PI_TS_IP>:61208`.
-
-### Create the homepage user and directories
-
-```bash
-sudo useradd --system --home-dir /var/lib/homepage --shell /usr/bin/nologin homepage
-sudo mkdir -p /var/lib/homepage/config /opt/homepage
-sudo chown homepage:homepage /var/lib/homepage
-sudo passwd --lock homepage
-```
-
-### Install Glances on dxp480tp
-
-Glances exposes a local web API for CPU, memory, disk, and uptime. Homepage's built-in `resources` widget only sees the Homepage process filesystem — Glances is the correct way to show NAS and Pi host stats.
-
-```bash
-sudo pacman -S --needed glances iputils python-fastapi uvicorn
-python -c "import fastapi, uvicorn; print('web deps ok')"
-```
-
-Install **both** `python-fastapi` and `uvicorn` — either one missing causes exit code **2** in `-w` mode. The one-liner must print `web deps ok` before enabling the service.
-
-`iputils` provides ICMP ping if you use Homepage's `ping` property on any service.
-
-```bash
-sudo nano /etc/systemd/system/glances.service
-```
-
-```ini
-[Unit]
-Description=Glances web server (localhost)
-After=network.target
-
-[Service]
-# Two dashes: --bind (not -bind)
-ExecStart=/usr/bin/glances -w --bind 127.0.0.1
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now glances
-systemctl status glances
-ss -tlnp | grep 61208
-curl -sf http://127.0.0.1:61208/api/4/quicklook | head -c 80; echo
-```
-
-If `curl` prints nothing, check the service log — missing `python-fastapi` and/or `uvicorn` is the usual cause (exit code **2**):
-
-```bash
-sudo systemctl stop glances
-sudo journalctl -u glances -n 30 --no-pager
-/usr/bin/glances -w --bind 127.0.0.1
-```
-
-The foreground run prints `FastAPI import error` or `Uvicorn import error` if a package is still missing. Fix with `sudo pacman -S python-fastapi uvicorn`, re-run the `python -c` check, then `sudo systemctl start glances`.
-
-**Exit code 2 but manual `glances -w --bind 127.0.0.1` works** — typo in the unit file. systemd must use `--bind` (two dashes). A single `-bind` makes Glances exit immediately with status 2:
-
-```bash
-grep ExecStart /etc/systemd/system/glances.service
-# must show: ExecStart=/usr/bin/glances -w --bind 127.0.0.1
-```
-
-```bash
-glances --version
-curl -v http://127.0.0.1:61208/api/4/quicklook
-```
-
-On older Glances 3.x, try `/api/3/quicklook` instead and set `version: 3` in Homepage widgets. Arch extra currently ships Glances 4.x (`/api/4/...`).
-
-### Build Homepage from source
-
-**Run as your normal user — do NOT use sudo** for the clone, install, and build:
-
-```bash
-sudo pacman -S --needed nodejs npm git
-sudo npm install -g pnpm
-```
-
-Pick a [release tag](https://github.com/gethomepage/homepage/releases) (example: `v1.13.2`):
-
-```bash
-git clone --depth 1 --branch v1.13.2 https://github.com/gethomepage/homepage.git /tmp/homepage-build
-cd /tmp/homepage-build
-pnpm install
-pnpm build
-```
-
-Install the built app to `/opt/homepage` and link config to `/var/lib/homepage/config`:
-
-```bash
-sudo rsync -a --delete \
-  --exclude config \
-  /tmp/homepage-build/ /opt/homepage/
-sudo cp -a /tmp/homepage-build/src/skeleton/. /var/lib/homepage/config/
-sudo rm -rf /opt/homepage/config
-sudo ln -s /var/lib/homepage/config /opt/homepage/config
-sudo chown -R homepage:homepage /var/lib/homepage
-sudo chown -R root:root /opt/homepage
-sudo chmod -R a+rX /opt/homepage
-rm -rf /tmp/homepage-build
-```
-
-To upgrade later: repeat the clone/build/rsync steps with a newer tag, then `sudo systemctl restart homepage`.
-
-### Store API keys and secrets
-
-Widget keys live in an env file, not in git-tracked YAML. Create:
-
-```bash
-sudo nano /var/lib/homepage/homepage.env
-```
-
-```bash
-HOMEPAGE_VAR_SONARR_KEY=
-HOMEPAGE_VAR_RADARR_KEY=
-HOMEPAGE_VAR_PROWLARR_KEY=
-HOMEPAGE_VAR_AUTOBRR_KEY=
-HOMEPAGE_VAR_QBIT_USER=
-HOMEPAGE_VAR_QBIT_PASS=
-HOMEPAGE_VAR_PLEX_TOKEN=
-HOMEPAGE_VAR_PIHOLE_KEY=
-```
-
-Fill in values:
-
-| Variable | Where to get it |
-|----------|-----------------|
-| `HOMEPAGE_VAR_SONARR_KEY` | Sonarr → Settings → General → API Key |
-| `HOMEPAGE_VAR_RADARR_KEY` | Radarr → Settings → General → API Key |
-| `HOMEPAGE_VAR_PROWLARR_KEY` | Prowlarr → Settings → General → API Key |
-| `HOMEPAGE_VAR_AUTOBRR_KEY` | autobrr → Settings → API Keys |
-| `HOMEPAGE_VAR_QBIT_USER` / `PASS` | qBittorrent Web UI credentials |
-| `HOMEPAGE_VAR_PLEX_TOKEN` | [Plex token](https://www.plexopedia.com/plex-media-server/general/plex-token/) |
-| `HOMEPAGE_VAR_PIHOLE_KEY` | Pi-hole app password or API key (`<PI_TS_IP>` on rpcmiv) |
-
-Reference secrets in YAML as `{{HOMEPAGE_VAR_SONARR_KEY}}`, etc.
-
-```bash
-sudo chown homepage:homepage /var/lib/homepage/homepage.env
-sudo chmod 600 /var/lib/homepage/homepage.env
-```
-
-### Configure Homepage
-
-Edit the three main config files under `/var/lib/homepage/config/`. Replace `<PI_TS_IP>` with `tailscale ip -4` output from **rpcmiv**.
-
-**`settings.yaml`** — minimal global settings:
-
-```yaml
-title: lehaus.io
-theme: dark
-color: zinc
-headerStyle: boxedWidgets
-statusStyle: dot
-```
-
-**`widgets.yaml`** — host stats (top bar):
-
-```yaml
-- glances:
-    label: dxp480tp
-    url: http://127.0.0.1:61208
-    version: 4
-    cpu: true
-    mem: true
-    uptime: true
-    disk:
-      - /
-      - /media
-    expanded: true
-
-- glances:
-    label: rpcmiv
-    url: http://<PI_TS_IP>:61208
-    version: 4
-    cpu: true
-    mem: true
-    uptime: true
-    disk: /
-    expanded: true
-```
-
-**`services.yaml`** — service groups (Vaultwarden omitted on purpose):
-
-```yaml
-- DNS:
-    - Pi-hole:
-        icon: pi-hole.png
-        href: https://pihole.lehaus.io
-        siteMonitor: https://pihole.lehaus.io/admin/
-        widget:
-          type: pihole
-          url: http://<PI_TS_IP>
-          version: 6
-          key: {{HOMEPAGE_VAR_PIHOLE_KEY}}
-
-- Download:
-    - qBittorrent:
-        icon: qbittorrent.png
-        href: https://qbit.lehaus.io
-        siteMonitor: http://127.0.0.1:8080
-        widget:
-          type: qbittorrent
-          url: http://127.0.0.1:8080
-          username: {{HOMEPAGE_VAR_QBIT_USER}}
-          password: {{HOMEPAGE_VAR_QBIT_PASS}}
-    - Qui:
-        icon: qui.png
-        href: https://qui.lehaus.io
-        siteMonitor: http://127.0.0.1:7476
-    - autobrr:
-        icon: autobrr.png
-        href: https://autobrr.lehaus.io
-        siteMonitor: http://127.0.0.1:7474
-        widget:
-          type: autobrr
-          url: http://127.0.0.1:7474
-          key: {{HOMEPAGE_VAR_AUTOBRR_KEY}}
-
-- Library:
-    - Prowlarr:
-        icon: prowlarr.png
-        href: https://prowlarr.lehaus.io
-        siteMonitor: http://127.0.0.1:9696
-        widget:
-          type: prowlarr
-          url: http://127.0.0.1:9696
-          key: {{HOMEPAGE_VAR_PROWLARR_KEY}}
-    - Sonarr:
-        icon: sonarr.png
-        href: https://sonarr.lehaus.io
-        siteMonitor: http://127.0.0.1:8989
-        widget:
-          type: sonarr
-          url: http://127.0.0.1:8989
-          key: {{HOMEPAGE_VAR_SONARR_KEY}}
-          enableQueue: true
-    - Radarr:
-        icon: radarr.png
-        href: https://radarr.lehaus.io
-        siteMonitor: http://127.0.0.1:7878
-        widget:
-          type: radarr
-          url: http://127.0.0.1:7878
-          key: {{HOMEPAGE_VAR_RADARR_KEY}}
-
-- Media:
-    - Plex:
-        icon: plex.png
-        href: https://plex.lehaus.io/web
-        siteMonitor: http://127.0.0.1:32400/web
-        widget:
-          type: plex
-          url: http://127.0.0.1:32400
-          key: {{HOMEPAGE_VAR_PLEX_TOKEN}}
-```
-
-Widget URLs use `http://127.0.0.1:...` because Homepage runs on the NAS and talks to backends directly (same as Caddy upstreams). `siteMonitor` uses those internal URLs so health checks work after HTTPS-only lockdown. User-facing links use `https://*.lehaus.io`.
-
-There is no official Caddy widget — infer Caddy health from green `siteMonitor` dots on proxied services.
-
-```bash
-sudo chown -R homepage:homepage /var/lib/homepage/config
-```
-
-### systemd unit for Homepage
-
-Homepage listens on localhost only; Caddy terminates TLS at `start.lehaus.io`.
-
-```bash
-sudo nano /etc/systemd/system/homepage.service
-```
-
-```ini
-[Unit]
-Description=Homepage dashboard
-After=network-online.target tailscaled.service glances.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=homepage
-Group=homepage
-WorkingDirectory=/opt/homepage
-Environment=NODE_ENV=production
-Environment=PORT=3000
-Environment=HOMEPAGE_ALLOWED_HOSTS=start.lehaus.io
-EnvironmentFile=/var/lib/homepage/homepage.env
-ExecStart=/usr/bin/node /opt/homepage/node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3000
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Add the Caddy block if you have not already (also shown in step 14):
-
-```caddyfile
-start.lehaus.io {
-    import tailnet
-    reverse_proxy 127.0.0.1:3000
-}
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now homepage
-sudo systemctl reload caddy
-systemctl status homepage glances
-```
-
-Open `https://start.lehaus.io` from a tailnet device. Click the refresh icon (bottom-right) after editing YAML.
-
-Check logs if widgets show API errors:
-
-```bash
-sudo journalctl -u homepage -f
-tail -f /var/lib/homepage/config/logs/homepage.log
-```
-
-**rpcmiv Glances widget empty** — confirm Glances on the Pi is running and bound to `<PI_TS_IP>` (rpcmiv step 17), and that `<PI_TS_IP>` in `widgets.yaml` matches `tailscale ip -4` on the Pi.
-
-**Host validation error** — ensure `HOMEPAGE_ALLOWED_HOSTS=start.lehaus.io` matches the browser URL exactly (see [Homepage docs](https://gethomepage.dev/installation/#homepage_allowed_hosts)).
-
-## 16. Set up Btrfs data SSD
+## 15. Set up Btrfs data SSD
 
 This sets up a single 2.5" SSD at `/data` with a subvolume layout that supports incremental backups via `btrfs send/receive` when a second SSD is added later.
 
@@ -1239,7 +887,7 @@ sudo systemctl enable --now daily-data-snapshot.timer
 systemctl list-timers daily-data-snapshot.timer
 ```
 
-## 17. (Future) Add backup SSD with btrfs send/receive
+## 16. (Future) Add backup SSD with btrfs send/receive
 
 When the second SSD arrives, format it, do an initial full send, then incremental sends going forward.
 
