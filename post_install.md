@@ -146,14 +146,8 @@ sudo passwd --lock qbt
 
 ## 5. Install paru (AUR helper)
 
-**Run as your normal user — do NOT use sudo:**
-
 ```bash
-git clone https://aur.archlinux.org/paru-git.git /tmp/paru-git
-cd /tmp/paru-git
-makepkg -si --noconfirm
-cd -
-rm -rf /tmp/paru-git
+paru -S paru-bin
 ```
 
 ## 6. Install Sonarr, Radarr, Prowlarr, autobrr, Qui, and Plex (AUR)
