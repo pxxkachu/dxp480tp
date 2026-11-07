@@ -161,7 +161,7 @@ rm -rf /tmp/paru-git
 **Run as your normal user — do NOT use sudo:**
 
 ```bash
-paru -S --needed sonarr-bin radarr-bin prowlarr-bin autobrr qui plex-media-server
+paru -S --needed sonarr-bin radarr-bin prowlarr-bin autobrr-bin qui plex-media-server
 ```
 
 Fix group membership after install (AUR tmpfiles may reset permissions):
