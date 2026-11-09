@@ -564,37 +564,52 @@ sudo nano /var/lib/caddy/Caddyfile
 
 qbit.lehaus.io {
     import tailnet
-    reverse_proxy 127.0.0.1:8080
-}
-
-qui.lehaus.io {
-    import tailnet
-    reverse_proxy 127.0.0.1:7476
+    reverse_proxy 127.0.0.1:8080 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
 }
 
 sonarr.lehaus.io {
     import tailnet
-    reverse_proxy 127.0.0.1:8989
+    reverse_proxy 127.0.0.1:8989 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
 }
 
 radarr.lehaus.io {
     import tailnet
-    reverse_proxy 127.0.0.1:7878
+    reverse_proxy 127.0.0.1:7878 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
 }
 
 prowlarr.lehaus.io {
     import tailnet
-    reverse_proxy 127.0.0.1:9696
+    reverse_proxy 127.0.0.1:9696 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
 }
 
 autobrr.lehaus.io {
     import tailnet
-    reverse_proxy 127.0.0.1:7474
-}
-
-warden.lehaus.io {
-    import tailnet
-    reverse_proxy 127.0.0.1:8000
+    reverse_proxy 127.0.0.1:7474 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
 }
 
 plex.lehaus.io {
@@ -602,6 +617,8 @@ plex.lehaus.io {
     reverse_proxy https://127.0.0.1:32400 {
         header_up Host {host}
         header_up X-Forwarded-Proto {scheme}
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
         transport http {
             tls_insecure_skip_verify
         }
