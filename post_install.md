@@ -547,7 +547,7 @@ sudo nano /var/lib/caddy/Caddyfile
 
 ```caddyfile
 {
-    email you@lehaus.io
+    email admin@lehaus.io
     acme_dns porkbun {
         api_key {env.PORKBUN_API_KEY}
         api_secret_key {env.PORKBUN_SECRET_API_KEY}
@@ -555,98 +555,74 @@ sudo nano /var/lib/caddy/Caddyfile
 }
 
 (tailnet) {
+    # Match requests that are NOT from Tailscale IPs
     @blocked not remote_ip 100.64.0.0/10
     respond @blocked "Unauthorized" 403
+
     tls {
         resolvers 1.1.1.1
     }
 }
 
+# Re-usable snippet to enforce session cookie stickiness
+(proxy_headers) {
+    header_up Host {host}
+    header_up X-Real-IP {remote_host}
+}
+
 qbit.lehaus.io {
     import tailnet
     reverse_proxy 127.0.0.1:8080 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
+        import proxy_headers
     }
 }
 
 sonarr.lehaus.io {
     import tailnet
     reverse_proxy 127.0.0.1:8989 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
+        import proxy_headers
     }
 }
 
 radarr.lehaus.io {
     import tailnet
     reverse_proxy 127.0.0.1:7878 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
+        import proxy_headers
     }
 }
 
 prowlarr.lehaus.io {
     import tailnet
     reverse_proxy 127.0.0.1:9696 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
+        import proxy_headers
     }
 }
 
 autobrr.lehaus.io {
     import tailnet
     reverse_proxy 127.0.0.1:7474 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
+        import proxy_headers
     }
 }
 
 qui.lehaus.io {
     import tailnet
     reverse_proxy 127.0.0.1:7476 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-        
-        # Enable persistent layout/session streaming
-        header_up Upgrade {http.request.header.Upgrade}
-        header_up Connection {http.request.header.Connection}
+        import proxy_headers
     }
 }
 
 warden.lehaus.io {
     import tailnet
     reverse_proxy 127.0.0.1:8000 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-        
-        # Crucial for Bitwarden push notifications and live sync session state
-        header_up Upgrade {http.request.header.Upgrade}
-        header_up Connection {http.request.header.Connection}
+        import proxy_headers
     }
 }
 
 plex.lehaus.io {
     import tailnet
     reverse_proxy https://127.0.0.1:32400 {
-        header_up Host {host}
-        header_up X-Forwarded-Proto {scheme}
-        header_up Upgrade {http.request.header.Upgrade}
-        header_up Connection {http.request.header.Connection}
+        import proxy_headers
         transport http {
             tls_insecure_skip_verify
         }
