@@ -612,6 +612,34 @@ autobrr.lehaus.io {
     }
 }
 
+qui.lehaus.io {
+    import tailnet
+    reverse_proxy 127.0.0.1:7476 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        
+        # Enable persistent layout/session streaming
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
+    }
+}
+
+warden.lehaus.io {
+    import tailnet
+    reverse_proxy 127.0.0.1:8000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        
+        # Crucial for Bitwarden push notifications and live sync session state
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
+    }
+}
+
 plex.lehaus.io {
     import tailnet
     reverse_proxy https://127.0.0.1:32400 {
